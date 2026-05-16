@@ -3,7 +3,7 @@
 InfiniteTap은 **Apple Vision Pro(visionOS) 스위치 제어(Switch Control)** 와 연동하기 위한
 **배터리리스 BLE HID 스위치 허브** 프로젝트입니다.
 
-이 프로젝트는 `M5Stamp C3U`와 `3.5mm` 적응형 스위치 입력을 사용하며,
+이 프로젝트는 **ESP32-C3 (RISC-V)** 기반의 초소형 개발 보드와 `3.5mm` 적응형 스위치 입력을 사용하며,
 배터리 없이 `USB-C` 상시 전원으로 동작하는 작고 단순한 스위치 동글을 목표로 합니다.
 
 현재 펌웨어 방향은 의도적으로 단순합니다.
@@ -31,15 +31,15 @@ InfiniteTap/
 
 ## 하드웨어 구성
 
-- `M5Stamp C3U`
+- ESP32-C3 기반 초소형 개발 보드 (예: `M5Stamp C3U`)
 - `PJ-320` 3.5mm 모노 잭
 - 외부 적응형 스위치 1개
 - USB-C 전원
 
 ### 배선
 
-- `PJ-320 GND` -> `M5Stamp C3U GND`
-- `PJ-320 Tip` -> `M5Stamp C3U GPIO 8 (G8)`
+- `PJ-320 GND` -> `MCU GND`
+- `PJ-320 Tip` -> `MCU GPIO 8 (G8)`
 
 ### 내장 자원
 
