@@ -55,14 +55,17 @@
 // 기계식 접점 채터링 제거 시간
 #define DEBOUNCE_MS                   35
 
+// Single press waits briefly before becoming hold so double-click can still branch.
+
 // 1회 클릭 hold 확정 시간
-#define SINGLE_HOLD_TRIGGER_MS        400
+#define SINGLE_HOLD_TRIGGER_MS        100
+
+// The second press must start within this window after the first release.
 
 // 첫 release 후 두 번째 press가 시작되어야 하는 최대 시간
 #define DOUBLE_CLICK_GAP_MS           300
 
 // 두 번째 press를 2회 클릭 hold로 승격하는 시간
-#define DOUBLE_HOLD_TRIGGER_MS        300
 
 // LED 이벤트 표시 시간
 #define EVENT_FLASH_MS                120
@@ -276,14 +279,6 @@ void finalizeSingleTap(unsigned long now) {
 // -----------------------------------------------------------------------------
 // 2회 클릭 짧은 탭 확정
 // -----------------------------------------------------------------------------
-void finalizeDoubleTap(unsigned long now) {
-  Serial.println("[INPUT] 2회 클릭을 짧은 탭으로 확정합니다.");
-  activateGestureKey(GESTURE_DOUBLE, now);
-  releaseActiveGestureKey();
-  resetSequenceState();
-}
-
-// -----------------------------------------------------------------------------
 // 새로운 시퀀스 시작
 // -----------------------------------------------------------------------------
 void startNewSequence(unsigned long now) {
@@ -307,7 +302,8 @@ void beginSecondPress(unsigned long now) {
   sequencePressCount = 2;
   currentPressStartTime = now;
 
-  Serial.println("[INPUT] 2번째 press가 시작되었습니다. 2회 클릭 후보로 전환합니다.");
+  Serial.println("[INPUT] 2번째 press가 시작되었습니다. 즉시 2회 클릭 액션을 활성화합니다.");
+  activateGestureKey(GESTURE_DOUBLE, now);
 }
 
 // -----------------------------------------------------------------------------
@@ -369,7 +365,7 @@ void handleStableRelease(unsigned long now) {
   // 두 번째 click까지 완료된 상태에서 아직 key hold로 승격되지 않았다면
   // 2회 탭으로 바로 마무리한다.
   if (sequencePressCount == 2 && sequenceReleaseCount == 2) {
-    finalizeDoubleTap(now);
+    resetSequenceState();
   }
 }
 
@@ -397,17 +393,10 @@ void updateGestureRecognition(unsigned long now) {
   }
 
   // 첫 번째 press를 0.4초 유지하면 1회 클릭 hold로 승격
+  // Upgrade single press quickly so Vision Pro can own the final hold timing.
   if (switchPressed && sequencePressCount == 1 && sequenceReleaseCount == 0) {
     if ((now - currentPressStartTime) >= SINGLE_HOLD_TRIGGER_MS) {
       activateGestureKey(GESTURE_SINGLE, now);
-      return;
-    }
-  }
-
-  // 두 번째 press를 0.3초 유지하면 2회 클릭 hold로 승격
-  if (switchPressed && sequencePressCount == 2 && sequenceReleaseCount == 1) {
-    if ((now - currentPressStartTime) >= DOUBLE_HOLD_TRIGGER_MS) {
-      activateGestureKey(GESTURE_DOUBLE, now);
       return;
     }
   }
@@ -567,9 +556,9 @@ void setup() {
   Serial.println("       1회 클릭 -> Space");
   Serial.println("       2회 클릭 -> Return");
   Serial.println("[INFO] 타이밍:");
-  Serial.println("       1회 hold 확정: 0.4초");
+  Serial.println("       1회 hold 확정: 0.1초");
   Serial.println("       2회 클릭 판정: 첫 release 후 0.3초");
-  Serial.println("       2회 hold 확정: 두 번째 press 유지 0.3초");
+  Serial.println("       2회 클릭 액션: 두 번째 press 시작 즉시 활성화");
 }
 
 // -----------------------------------------------------------------------------
