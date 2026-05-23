@@ -18,11 +18,14 @@
 
 // 타이밍
 #define DEBOUNCE_MS 20
-#define EVENT_FLASH_MS 120
-#define ADVERTISING_BLINK_MS 500
 #define BOND_RESET_HOLD_MS 3000
 #define RESET_BLINK_MS 120
 #define RESET_SEQUENCE_MS 1600
+#define BOOT_FLASH_MS 180
+#define PROBLEM_BLINK_MS 150
+#define PROBLEM_GAP_MS 120
+#define PROBLEM_FLASH_COUNT 3
+#define LED_BRIGHTNESS 16
 
 // HID 키 매핑
 #define SWITCH_KEYCODE KEY_SPACE
@@ -36,24 +39,37 @@ unsigned long switchDebounceStart = 0;
 
 bool switchKeyPressed = false;
 
-unsigned long eventFlashUntil = 0;
-unsigned long advertisingBlinkMark = 0;
-bool advertisingBlinkOn = false;
-
 bool centerButtonWasDown = false;
 unsigned long centerButtonPressStart = 0;
 bool bondResetInProgress = false;
 unsigned long bondResetStart = 0;
 
+bool bootFlashActive = false;
+unsigned long bootFlashUntil = 0;
+bool problemIndicatorPending = false;
+bool problemIndicatorActive = false;
+unsigned long problemIndicatorStart = 0;
+
 bool lastConnectedState = false;
 bool lastPairedState = false;
 
 void setColor(uint8_t r, uint8_t g, uint8_t b) {
+  static uint8_t lastR = 255;
+  static uint8_t lastG = 255;
+  static uint8_t lastB = 255;
+
+  if (r == lastR && g == lastG && b == lastB) {
+    return;
+  }
+
+  lastR = r;
+  lastG = g;
+  lastB = b;
   strip.setPixelColor(0, strip.Color(r, g, b));
   strip.show();
 }
 
-void pressSwitchKey(unsigned long now) {
+void pressSwitchKey() {
   if (switchKeyPressed) {
     return;
   }
@@ -65,7 +81,6 @@ void pressSwitchKey(unsigned long now) {
 
   bleKeyboard.press(SWITCH_KEYCODE);
   switchKeyPressed = true;
-  eventFlashUntil = now + EVENT_FLASH_MS;
   Serial.println("[INPUT] 스위치 누름 -> 키 다운");
 }
 
@@ -103,9 +118,9 @@ void logBleStateIfChanged() {
   }
 }
 
-void handleStableSwitchEdge(bool newStableState, unsigned long now) {
+void handleStableSwitchEdge(bool newStableState) {
   if (newStableState == LOW) {
-    pressSwitchKey(now);
+    pressSwitchKey();
   } else {
     releaseSwitchKey();
   }
@@ -121,7 +136,7 @@ void updateSwitchInput(unsigned long now) {
 
   if ((now - switchDebounceStart) >= DEBOUNCE_MS && stableSwitchState != rawSwitchState) {
     stableSwitchState = rawSwitchState;
-    handleStableSwitchEdge(stableSwitchState, now);
+    handleStableSwitchEdge(stableSwitchState);
   }
 }
 
@@ -174,32 +189,61 @@ void updateBondResetState(unsigned long now) {
   ESP.restart();
 }
 
+void startProblemIndicator(unsigned long now) {
+  problemIndicatorPending = false;
+  problemIndicatorActive = true;
+  problemIndicatorStart = now;
+}
+
+bool updateProblemIndicator(unsigned long now) {
+  if (!problemIndicatorActive) {
+    return false;
+  }
+
+  const unsigned long cycleMs = PROBLEM_BLINK_MS + PROBLEM_GAP_MS;
+  const unsigned long totalMs = PROBLEM_FLASH_COUNT * cycleMs;
+  unsigned long elapsed = now - problemIndicatorStart;
+
+  if (elapsed >= totalMs) {
+    problemIndicatorActive = false;
+    setColor(0, 0, 0);
+    return false;
+  }
+
+  if ((elapsed % cycleMs) < PROBLEM_BLINK_MS) {
+    setColor(255, 96, 0);
+  } else {
+    setColor(0, 0, 0);
+  }
+
+  return true;
+}
+
 void updateStatusLed(unsigned long now) {
   if (bondResetInProgress) {
     updateBondResetState(now);
     return;
   }
 
-  if (now < eventFlashUntil) {
-    setColor(255, 0, 0);
-    return;
-  }
+  if (bootFlashActive) {
+    if (now < bootFlashUntil) {
+      setColor(0, 48, 0);
+      return;
+    }
 
-  if (bleKeyboard.isConnected()) {
-    setColor(0, 255, 0);
-    return;
-  }
-
-  if ((now - advertisingBlinkMark) >= ADVERTISING_BLINK_MS) {
-    advertisingBlinkMark = now;
-    advertisingBlinkOn = !advertisingBlinkOn;
-  }
-
-  if (advertisingBlinkOn) {
-    setColor(0, 0, 255);
-  } else {
+    bootFlashActive = false;
     setColor(0, 0, 0);
+
+    if (problemIndicatorPending) {
+      startProblemIndicator(now);
+    }
   }
+
+  if (updateProblemIndicator(now)) {
+    return;
+  }
+
+  setColor(0, 0, 0);
 }
 
 void setup() {
@@ -210,7 +254,7 @@ void setup() {
   Serial.println("========================================");
 
   strip.begin();
-  strip.setBrightness(100);
+  strip.setBrightness(LED_BRIGHTNESS);
   setColor(0, 0, 0);
 
   pinMode(SWITCH_PIN, INPUT_PULLUP);
@@ -226,12 +270,28 @@ void setup() {
   stableSwitchState = rawSwitchState;
   lastConnectedState = bleKeyboard.isConnected();
   lastPairedState = bleKeyboard.isPaired();
+  bootFlashActive = true;
+  bootFlashUntil = millis() + BOOT_FLASH_MS;
 
-  Serial.println("[BLE] 광고를 시작했습니다. 연결 전에는 파란 LED가 점멸합니다.");
+  if (stableSwitchState == LOW) {
+    problemIndicatorPending = true;
+    Serial.println("[WARN] 부팅 시점에 외부 스위치 입력이 이미 눌려 있습니다.");
+  }
+
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    problemIndicatorPending = true;
+    Serial.println("[WARN] 부팅 시점에 중앙 버튼이 이미 눌려 있습니다.");
+  }
+
+  Serial.println("[BLE] 광고를 시작했습니다. 기본 상태에서는 LED를 켜지 않습니다.");
   Serial.println("[INFO] 장치 이름: InfiniteTap");
   Serial.println("[INFO] 입력 매핑:");
   Serial.println("       스위치 누름  -> Space key down");
   Serial.println("       스위치 해제  -> Space key up");
+  Serial.println("[INFO] LED 정책:");
+  Serial.println("       부팅 직후    -> 짧은 초록 점등 1회");
+  Serial.println("       문제 감지    -> 주황 점멸 3회");
+  Serial.println("       본드 리셋    -> 자홍 점멸");
   Serial.println("[INFO] 타이밍:");
   Serial.println("       디바운스: 20ms");
   Serial.println("       로컬 tap/hold 분기: 비활성화");
