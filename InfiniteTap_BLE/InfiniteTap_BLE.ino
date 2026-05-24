@@ -11,13 +11,14 @@
 // -----------------------------------------------------------------------------
 
 // 하드웨어 핀
-#define SWITCH_PIN 8
+#define SWITCH_PIN 4
 #define LED_PIN 2
 #define BUTTON_PIN 3
 #define NUM_LEDS 1
 
 // 타이밍
 #define DEBOUNCE_MS 20
+#define SECONDARY_HOLD_MS 5000
 #define BOND_RESET_HOLD_MS 3000
 #define RESET_BLINK_MS 120
 #define RESET_SEQUENCE_MS 1600
@@ -28,7 +29,8 @@
 #define LED_BRIGHTNESS 16
 
 // HID 키 매핑
-#define SWITCH_KEYCODE KEY_SPACE
+#define PRIMARY_SWITCH_KEYCODE KEY_F13
+#define SECONDARY_SWITCH_KEYCODE KEY_F14
 
 HijelHID_BLEKeyboard bleKeyboard("InfiniteTap", "Primax", 100);
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -36,8 +38,10 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 bool rawSwitchState = HIGH;
 bool stableSwitchState = HIGH;
 unsigned long switchDebounceStart = 0;
+unsigned long switchPressStart = 0;
 
 bool switchKeyPressed = false;
+bool secondaryHoldTriggered = false;
 
 bool centerButtonWasDown = false;
 unsigned long centerButtonPressStart = 0;
@@ -69,7 +73,7 @@ void setColor(uint8_t r, uint8_t g, uint8_t b) {
   strip.show();
 }
 
-void pressSwitchKey() {
+void pressSwitchKey(unsigned long now) {
   if (switchKeyPressed) {
     return;
   }
@@ -79,9 +83,11 @@ void pressSwitchKey() {
     return;
   }
 
-  bleKeyboard.press(SWITCH_KEYCODE);
+  bleKeyboard.press(PRIMARY_SWITCH_KEYCODE);
   switchKeyPressed = true;
-  Serial.println("[INPUT] 스위치 누름 -> 키 다운");
+  switchPressStart = now;
+  secondaryHoldTriggered = false;
+  Serial.println("[INPUT] 스위치 누름 -> F13 키 다운");
 }
 
 void releaseSwitchKey() {
@@ -91,7 +97,23 @@ void releaseSwitchKey() {
 
   bleKeyboard.releaseAll();
   switchKeyPressed = false;
+  secondaryHoldTriggered = false;
+  switchPressStart = 0;
   Serial.println("[INPUT] 스위치 해제 -> 키 업");
+}
+
+void triggerSecondaryHoldAction() {
+  if (secondaryHoldTriggered || !switchKeyPressed) {
+    return;
+  }
+
+  bleKeyboard.releaseAll();
+  switchKeyPressed = false;
+  bleKeyboard.press(SECONDARY_SWITCH_KEYCODE);
+  bleKeyboard.releaseAll();
+  secondaryHoldTriggered = true;
+  switchPressStart = 0;
+  Serial.println("[INPUT] 5초 홀드 감지 -> F13 해제 후 F14 단발 입력");
 }
 
 void logBleStateIfChanged() {
@@ -118,9 +140,9 @@ void logBleStateIfChanged() {
   }
 }
 
-void handleStableSwitchEdge(bool newStableState) {
+void handleStableSwitchEdge(bool newStableState, unsigned long now) {
   if (newStableState == LOW) {
-    pressSwitchKey();
+    pressSwitchKey(now);
   } else {
     releaseSwitchKey();
   }
@@ -136,7 +158,17 @@ void updateSwitchInput(unsigned long now) {
 
   if ((now - switchDebounceStart) >= DEBOUNCE_MS && stableSwitchState != rawSwitchState) {
     stableSwitchState = rawSwitchState;
-    handleStableSwitchEdge(stableSwitchState);
+    handleStableSwitchEdge(stableSwitchState, now);
+  }
+}
+
+void updateSecondaryHold(unsigned long now) {
+  if (stableSwitchState != LOW || secondaryHoldTriggered || !switchKeyPressed) {
+    return;
+  }
+
+  if ((now - switchPressStart) >= SECONDARY_HOLD_MS) {
+    triggerSecondaryHoldAction();
   }
 }
 
@@ -286,15 +318,16 @@ void setup() {
   Serial.println("[BLE] 광고를 시작했습니다. 기본 상태에서는 LED를 켜지 않습니다.");
   Serial.println("[INFO] 장치 이름: InfiniteTap");
   Serial.println("[INFO] 입력 매핑:");
-  Serial.println("       스위치 누름  -> Space key down");
-  Serial.println("       스위치 해제  -> Space key up");
+  Serial.println("       스위치 누름  -> F13 key down");
+  Serial.println("       스위치 해제  -> F13 key up");
+  Serial.println("       5초 홀드     -> F13 해제 후 F14 1회 입력");
   Serial.println("[INFO] LED 정책:");
   Serial.println("       부팅 직후    -> 짧은 초록 점등 1회");
   Serial.println("       문제 감지    -> 주황 점멸 3회");
   Serial.println("       본드 리셋    -> 자홍 점멸");
   Serial.println("[INFO] 타이밍:");
   Serial.println("       디바운스: 20ms");
-  Serial.println("       로컬 tap/hold 분기: 비활성화");
+  Serial.println("       보조 키 홀드 분기: 5000ms");
 }
 
 void loop() {
@@ -305,6 +338,7 @@ void loop() {
 
   if (!bondResetInProgress) {
     updateSwitchInput(now);
+    updateSecondaryHold(now);
   }
 
   updateStatusLed(now);
